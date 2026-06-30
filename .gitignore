@@ -1,0 +1,6 @@
+# Block heavy model weights and test datasets
+*.bin
+
+# Block compiled executables
+*.exe
+inference
