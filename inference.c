@@ -181,10 +181,22 @@ int main() {
 
     FILE* fp_w = fopen("model_weights.bin", "rb");
     FILE* fp_d = fopen("test_data.bin", "rb");
-    if (!fp_w || !fp_d) {
-        printf(" Allocation Crash Error: Missing model_weights.bin or test_data.bin payloads.\n");
+    FILE* fp_p = fopen("pytorch_preds.bin", "rb");
+    if (!fp_w || !fp_d || !fp_p) {
+        printf(" Allocation Crash Error: Missing model_weights.bin, test_data.bin, or pytorch_preds.bin payloads.\n");
+        if (fp_w) fclose(fp_w);
+        if (fp_d) fclose(fp_d);
+        if (fp_p) fclose(fp_p);
         return -1;
     }
+    // Read total samples first so we can safely load the matching prediction array size
+    int total_samples = 0;
+    fread(&total_samples, sizeof(int), 1, fp_d);
+
+    // Load PyTorch Reference Data Array Package
+    int* pytorch_preds = (int*)malloc(total_samples * sizeof(int));
+    fread(pytorch_preds, sizeof(int), total_samples, fp_p);
+    fclose(fp_p);
 
     // Initialize Network Structural Blueprint Mapping
     FusedConv layers[TOTAL_LAYERS];
@@ -260,16 +272,18 @@ int main() {
     printf("--------------------------------------------------------------------\n");
     printf("Fully Connected Head Classifier Memory : %7zu B (%6.2f KB)\n", fc_mem, (double)fc_mem / 1024.0);
     printf("Intermediate Activation Buffers Memory : %7zu B (%6.2f KB)\n", buf_mem, (double)buf_mem / 1024.0);
+   // Change line 275 from using 'pytorch_mem' to this:
+printf("PyTorch Vector Heap Reference Space  : %7zu B (%6.2f KB)\n", 
+       (size_t)(total_samples * sizeof(int)), 
+       (double)(total_samples * sizeof(int)) / 1024.0);
     printf("====================================================================\n");
     printf("TOTAL ACTIVE HEAP ALLOCATION           : %zu B (%.2f MB)\n", total_allocated_bytes, (double)total_allocated_bytes / (1024.0 * 1024.0));
     printf("====================================================================\n\n");
-
-    int total_samples = 0;
-    fread(&total_samples, sizeof(int), 1, fp_d);
     
     printf(" Running Bit-Exact Validation Streaming over %d items...\n\n", total_samples);
 
     int correct_predictions = 0;
+    int framework_matches = 0;
     double continuous_accumulated_time = 0.0;
 
     // Granular Layer-by-Layer Profiling Accumulators
@@ -393,7 +407,7 @@ int main() {
             }
         }
 
-        // SAFE POPULATION OF THE MATRIX
+       // SAFE POPULATION OF THE MATRIX
         if (true_label >= 0 && true_label < NUM_CLASSES) {
             confusion_matrix[true_label][predicted_label]++;
         }
@@ -402,10 +416,16 @@ int main() {
             correct_predictions++;
         }
 
-        // Logging evaluation telemetry
+        // Track framework alignment status
+        if (predicted_label == pytorch_preds[item]) {
+            framework_matches++;
+        }
+
+        // Telemetry loop showing real-time validation matching with image format
         if ((item + 1) % 1000 == 0 || item < 15) {
-            printf("Image Record Index [%4d] -> Real Label: %d | C-Model Output: %d %s\n", 
-                   item, true_label, predicted_label, (predicted_label == true_label) ? "PASS" : "MISCLASSIFIED");
+            printf("Image Record Index [%4d] -> Real Label: %d | C-Model Output: %d | PyTorch Reference: %d -> %s\n", 
+                   item, true_label, predicted_label, pytorch_preds[item], 
+                   (predicted_label == pytorch_preds[item]) ? "MATCH" : "MISMATCH");
         }
     }
     fclose(fp_d); // Explicit verified semicolon integration
@@ -413,13 +433,16 @@ int main() {
     printf("\n====================================================================\n");
     printf(" FINAL REPORT: FULL C INFERENCE BENCHMARK METRICS\n");
     printf("====================================================================\n");
-    printf("Total Streaming Evaluations       : %d\n", total_samples);
-    printf("Matching Correct Predictions      : %d\n", correct_predictions);
+    printf("Total Streaming Evaluations        : %d\n", total_samples);
+    printf("Matching Correct Predictions       : %d\n", correct_predictions);
     printf("Calculated Pipeline Target Accuracy: %.2f%%\n", ((float)correct_predictions / total_samples) * 100.0f);
-    printf("Total Pure Processing Duration    : %.3f ms\n", continuous_accumulated_time);
-    printf("Normalized Time per Single Image  : %.4f ms\n", continuous_accumulated_time / total_samples);
+    printf("Framework Parity Matches           : %d / %d\n", framework_matches, total_samples);
+    printf("Cross-Framework Parity Alignment   : %.2f%%\n", ((float)framework_matches / total_samples) * 100.0f);
+    printf("--------------------------------------------------------------------\n");
+    printf("TOTAL INFERENCE EXECUTION TIME     : %.3f ms\n", continuous_accumulated_time);
+    printf("Normalized Time per Single Image   : %.4f ms\n", continuous_accumulated_time / total_samples);
     printf("====================================================================\n");
-
+    
     // --- PRINTING THE CONFUSION MATRIX MATRIX ---
     printf("\n====================================================================\n");
     printf(" CONFUSION MATRIX (Rows: Actual Class | Columns: Predicted Class)\n");
