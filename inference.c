@@ -19,6 +19,7 @@ typedef struct {
     int stride;
     int padding;
     int is_depthwise;
+    size_t param_count;
 } FusedConv;
 
 // High-precision cross-platform execution timer
@@ -164,6 +165,7 @@ void load_layer(FusedConv* layer, int in_c, int out_c, int k, int stride, int pa
     layer->stride = stride; layer->padding = padding; layer->is_depthwise = is_depthwise;
     
     int w_count = is_depthwise ? out_c * k * k : out_c * in_c * k * k;
+    layer->param_count = (size_t)(w_count + out_c); // Total Elements (Weights + Biases)
     layer->weights = (float*)malloc(w_count * sizeof(float));
     layer->bias = (float*)malloc(out_c * sizeof(float));
     
@@ -253,12 +255,16 @@ int main() {
     printf("====================================================================\n");
     
     size_t total_allocated_bytes = 0;
+    size_t total_network_parameters = 0;
+
     
     for (int i = 0; i < TOTAL_LAYERS; i++) {
         size_t w_size = _msize(layers[i].weights);
         size_t b_size = _msize(layers[i].bias);
         size_t layer_total = w_size + b_size;
+
         total_allocated_bytes += layer_total;
+        total_network_parameters += layers[i].param_count;
         
         printf("Layer [%2d] (%s) -> W: %7zu B | B: %5zu B | Total: %7zu B (%6.2f KB)\n",
                i, (layers[i].is_depthwise ? "DW-Conv" : "PW-Conv"),
@@ -268,14 +274,18 @@ int main() {
     size_t fc_mem = _msize(fc_weights) + _msize(fc_bias);
     size_t buf_mem = _msize(bufA) + _msize(bufB) + _msize(b1_buf) + _msize(b2_buf) + _msize(concat_buf) + _msize(input_img);
     total_allocated_bytes += fc_mem + buf_mem;
+    size_t fc_params = (NUM_CLASSES * 1024) + NUM_CLASSES;
+    total_network_parameters += fc_params;
 
     printf("--------------------------------------------------------------------\n");
     printf("Fully Connected Head Classifier Memory : %7zu B (%6.2f KB)\n", fc_mem, (double)fc_mem / 1024.0);
     printf("Intermediate Activation Buffers Memory : %7zu B (%6.2f KB)\n", buf_mem, (double)buf_mem / 1024.0);
+    printf("Total Network Parameters               : %zu\n", total_network_parameters);
    // Change line 275 from using 'pytorch_mem' to this:
-printf("PyTorch Vector Heap Reference Space  : %7zu B (%6.2f KB)\n", 
+    printf("PyTorch Vector Heap Reference Space  : %7zu B (%6.2f KB)\n", 
        (size_t)(total_samples * sizeof(int)), 
        (double)(total_samples * sizeof(int)) / 1024.0);
+    printf("TOTAL BACKEND WEIGHTS & BIASES COUNT   : %zu network parameters\n", total_network_parameters);
     printf("====================================================================\n");
     printf("TOTAL ACTIVE HEAP ALLOCATION           : %zu B (%.2f MB)\n", total_allocated_bytes, (double)total_allocated_bytes / (1024.0 * 1024.0));
     printf("====================================================================\n\n");
